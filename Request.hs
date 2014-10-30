@@ -19,19 +19,13 @@ import Data.Time.Format
 import Data.List
 import Data.List.Split
 
+import qualified Data.ByteString.Lazy.Char8 as BS
+
 -- IP Address
 type IPAddr = (Word8, Word8, Word8, Word8)
 
-readIPAddr :: String -> IPAddr
-readIPAddr = toTup . map read . splitOn "."
-    where toTup [a, b, c, d] = (a, b, c, d)
-
 -- Method
 data Method = Get | Post | Unknown deriving (Show, Eq)
-
-readMethod :: String -> Method
-readMethod = fromMaybe Unknown . flip lookup table
-    where table = [("GET", Get), ("POST", Post)]
 
 -- Request
 data Request = Request {
@@ -40,22 +34,31 @@ data Request = Request {
     date :: UTCTime
 } deriving (Show)
 
-readRequest :: String -> Request
-readRequest s =
-  Request {
-    ip = ip,
-    method = method,
-    date = date
-  }
+-- Reading from ByteString
+
+readIPAddr :: BS.ByteString -> Maybe IPAddr
+readIPAddr s = do
+  let skipRead = BS.readInt . BS.tail
+  (n1, r1) <- BS.readInt s
+  (n2, r2) <- skipRead r1
+  (n3, r3) <- skipRead r2
+  (n4, r4) <- skipRead r3
+  return (fromIntegral n1, fromIntegral n2, fromIntegral n3, fromIntegral n4)
+
+readMethod :: BS.ByteString -> Maybe Method
+readMethod = flip lookup bstable
+  where bstable = map (\(a,b) -> (BS.pack a, b)) table
+        table = [("GET", Get), ("POST", Post)]
+
+readDate :: BS.ByteString -> Maybe UTCTime
+readDate = parseTime defaultTimeLocale dateFmt . BS.unpack
+  where dateFmt = "%d/%b/%Y:%H:%M:%S"
+
+readRequest :: BS.ByteString -> Maybe Request
+readRequest s = do
+  ip <- readIPAddr s
+  method <- readMethod . BS.takeWhile (/= ' ') . dropWhile' (/= '"') $ s
+  date <- readDate . BS.takeWhile (/= ' ') . dropWhile' (/= '[') $ s
+  return Request { ip = ip, method = method, date = date }
   where
-    dropWhile' p l = drop 1 $ dropWhile p l
-    dateFmt = "%d/%b/%Y:%H:%M:%S"
-
-    extractMethod = takeWhile (/= ' ') . dropWhile' (/= '"')
-    extractDateString = takeWhile (/= ' ') . dropWhile' (/= '[')
-    extractDate = parseTime defaultTimeLocale dateFmt . extractDateString
-    extractIP = takeWhile (/= ' ')
-
-    ip = readIPAddr . extractIP $ s
-    date = fromJust . extractDate $ s
-    method = readMethod . extractMethod $ s
+    dropWhile' p = BS.drop 1 . BS.dropWhile p
